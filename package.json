@@ -1,0 +1,37 @@
+{
+  "name": "amy-telegram",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Amy, an AI companion on Telegram. Milestone 1: webhook, users, conversations, and text replies.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/prompts/amy-profile.test.ts src/services/amyBrain/schema.test.ts src/services/messageProcessor/burstScheduler.test.ts src/services/messageProcessor/runTurn.test.ts src/services/transport/telegramBotTransport.test.ts",
+    "db:generate": "prisma generate",
+    "db:validate": "prisma validate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "next": "^16.3.6",
+    "openai": "^4.104.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "^16.3.6",
+    "prisma": "^6.19.3",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3"
+  }
+}
