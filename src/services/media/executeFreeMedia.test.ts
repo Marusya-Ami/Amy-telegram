@@ -213,7 +213,7 @@ test("cooldown follows MediaSent and an explicit request still bypasses it", asy
     });
     assert.equal(sends, 0);
 
-    // After cooldown window has elapsed (16 minutes), an unseen asset can be sent
+    // After cooldown window has elapsed (65 minutes), an unseen asset can be sent
     const uniq = `tg-file-uniq-free-2-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const secondAsset = await prisma.mediaAsset.create({
       data: {
@@ -237,7 +237,7 @@ test("cooldown follows MediaSent and an explicit request still bypasses it", asy
     try {
       await observeSalesTurn(await fixture.turn("send me a pic"), {
         mode: "shadow",
-        now: new Date(NOW.getTime() + 16 * 60 * 1000),
+        now: new Date(NOW.getTime() + 60 * 60 * 1000),
         freeMediaMode: "live",
         sendFreePhoto: async () => {
           sends += 1;
@@ -529,7 +529,7 @@ test("regression A: asset A sent once cannot be selected again for the same user
       conversationId: fixture.conversationId,
       mediaAssetId: fixture.assetId,
       source: "FREE_MEDIA",
-      sentAt: new Date(NOW.getTime() - 30 * 60 * 1000),
+      sentAt: new Date(NOW.getTime() - 70 * 60 * 1000),
     });
     let sends = 0;
     await observeSalesTurn(await fixture.turn("send me a pic"), {

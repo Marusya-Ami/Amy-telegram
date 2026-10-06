@@ -66,6 +66,76 @@ test("a one-message reply does not wait between bubbles", async () => {
   }
 });
 
+test("the tip action starts only after every reply bubble is delivered", async () => {
+  const { prisma } = await import("../../lib/db/prisma");
+  const { processTextBurst } = await import("./runTurn");
+  const user = await seedUser(prisma, "test-tip-order");
+  const events: string[] = [];
+
+  try {
+    await seedText(prisma, user, ["Я хочу оставить тебе чаевые"]);
+    await processTextBurst(user.userId, {
+      generate: async () => ["мне очень приятно", "что ты хочешь меня поддержать"],
+      send: async (_chatId, text) => {
+        events.push(`reply:${text}`);
+        return { messageId: text.endsWith("поддержать") ? "877" : "876" };
+      },
+      sleep: async () => undefined,
+      delayMs: () => 0,
+      observeSales: async (input) => {
+        const stored = await prisma.message.count({
+          where: { userId: user.userId, direction: "OUTBOUND" },
+        });
+        events.push(`tip:${input.replyMessageId}:${stored}`);
+      },
+    });
+    assert.deepEqual(events, [
+      "reply:мне очень приятно",
+      "reply:что ты хочешь меня поддержать",
+      "tip:877:2",
+    ]);
+    const outbound = await prisma.message.findMany({
+      where: { userId: user.userId, direction: "OUTBOUND" },
+      orderBy: { createdAt: "asc" },
+    });
+    assert.deepEqual(outbound.map((message) => message.text), [
+      "мне очень приятно",
+      "что ты хочешь меня поддержать",
+    ]);
+  } finally {
+    await cleanup(prisma, user.userId);
+  }
+});
+
+test("a free photo is only considered after the reply is stored", async () => {
+  const { prisma } = await import("../../lib/db/prisma");
+  const { processTextBurst } = await import("./runTurn");
+  const user = await seedUser(prisma, "test-free-photo-order");
+  const events: string[] = [];
+
+  try {
+    await seedText(prisma, user, ["покажешь фотку?"]);
+    await processTextBurst(user.userId, {
+      generate: async () => ["может быть"],
+      send: async () => {
+        events.push("reply");
+        return { messageId: "880" };
+      },
+      sleep: async () => undefined,
+      delayMs: () => 0,
+      observeSales: async () => {
+        const stored = await prisma.message.count({
+          where: { userId: user.userId, direction: "OUTBOUND" },
+        });
+        events.push(`photo-after:${stored}`);
+      },
+    });
+    assert.deepEqual(events, ["reply", "photo-after:1"]);
+  } finally {
+    await cleanup(prisma, user.userId);
+  }
+});
+
 test("three outbound bubbles are stored and a fourth is never sent", async () => {
   const { prisma } = await import("../../lib/db/prisma");
   const { processTextBurst } = await import("./runTurn");
@@ -99,31 +169,31 @@ test("different users are processed at the same time", async () => {
   const second = await seedUser(prisma, "test-m1-parallel-b");
   let active = 0;
   let maxActive = 0;
+  let entered = 0;
+  let releaseBoth: () => void = () => undefined;
+  const bothEntered = new Promise<void>((resolve) => {
+    releaseBoth = resolve;
+  });
+  const holdGenerate = (label: string): TurnDeps["generate"] => async () => {
+    entered += 1;
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    if (entered >= 2) releaseBoth();
+    await Promise.race([bothEntered, new Promise((resolve) => setTimeout(resolve, 2000))]);
+    active -= 1;
+    return [label];
+  };
 
   try {
     await seedText(prisma, first, ["from a"]);
     await seedText(prisma, second, ["from b"]);
     const started = Date.now();
     await Promise.all([
-      processTextBurst(first.userId, slowDeps("reply a", () => {
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        return new Promise((resolve) => setTimeout(() => {
-          active -= 1;
-          resolve(["reply a"]);
-        }, 180));
-      })),
-      processTextBurst(second.userId, slowDeps("reply b", () => {
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        return new Promise((resolve) => setTimeout(() => {
-          active -= 1;
-          resolve(["reply b"]);
-        }, 180));
-      })),
+      processTextBurst(first.userId, slowDeps("reply a", holdGenerate("reply a"))),
+      processTextBurst(second.userId, slowDeps("reply b", holdGenerate("reply b"))),
     ]);
 
-    assert.ok(Date.now() - started < 340);
+    assert.ok(Date.now() - started < 5000);
     assert.equal(maxActive, 2);
     const replies = await prisma.message.findMany({
       where: { userId: { in: [first.userId, second.userId] }, direction: "OUTBOUND" },

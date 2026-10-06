@@ -148,8 +148,9 @@ test("live prompt test: invented Switzerland/shared-trip scenario is not confirm
   const text = reply.join(" ");
   console.log(`[grounding test reply]: ${text}`);
 
-  // Must NOT confirm the trip as a factual shared event (e.g. "I remember that trip", "when we climbed", "our trip to Switzerland")
-  assert.doesNotMatch(text, /i remember (?:that|when we|our trip|climbing)/i);
+  // Must NOT confirm the trip as a factual shared event (e.g. "I remember that trip", "when we climbed", "our trip to Switzerland").
+  // Do not treat denials such as "I'm not sure I remember that one" as confirmation.
+  assert.doesNotMatch(text, /i remember (?:that trip|when we|our trip|climbing)/i);
   assert.doesNotMatch(text, /we had so much fun in switzerland/i);
   assert.doesNotMatch(text, /damals in der schweiz/i);
 

@@ -37,10 +37,11 @@ The app listens on port 3000.
 | `TELEGRAM_WEBHOOK_SECRET` | Required. Any long random string you also pass to `setWebhook`. |
 | `OPENAI_API_KEY` | Required. |
 | `OPENAI_MODEL` | Optional. Defaults to `gpt-4o-mini` when empty. |
-| `OWNER_TELEGRAM_ID` | Not used until a later milestone. |
+| `OWNER_TELEGRAM_ID` | Numeric Telegram user id for free-media upload on the technical bot. Empty disables admin upload. |
 | `APP_TIMEZONE` | Defaults to `America/Cancun`. Not used for scheduling yet. |
-| `MEDIA_STORAGE_PATH` | Reserved for later media storage. |
+| `MEDIA_STORAGE_PATH` | Free-media directory. Empty uses `./data/amy-media`. Production uses `/srv/amy-telegram/media`. |
 | `CRON_SECRET` | Reserved for later scheduled jobs. |
+| `DROPP_WEBHOOK_SECRET` | Optional Dropp webhook secret. Verification is not implemented yet. |
 
 Telegram must reach `https://<your-host>/api/telegram/webhook`. For a laptop, expose port 3000 with a tunnel, then register the webhook:
 
@@ -48,7 +49,7 @@ Telegram must reach `https://<your-host>/api/telegram/webhook`. For a laptop, ex
 curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
   -d "url=https://<public-host>/api/telegram/webhook" \
   -d "secret_token=${TELEGRAM_WEBHOOK_SECRET}" \
-  -d "allowed_updates=[\"message\"]"
+  -d "allowed_updates=[\"message\",\"pre_checkout_query\",\"purchased_paid_media\",\"business_connection\",\"business_message\",\"edited_business_message\",\"deleted_business_messages\"]"
 ```
 
 `secret_token` must match `TELEGRAM_WEBHOOK_SECRET`.

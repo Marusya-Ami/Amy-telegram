@@ -10,6 +10,9 @@ const envSchema = z.object({
   APP_TIMEZONE: z.string().min(1).default("America/Cancun"),
   MEDIA_STORAGE_PATH: z.string().optional().default("./data/amy-media"),
   CRON_SECRET: z.string().optional().default(""),
+  QUIET_HOURS_START: z.string().optional().default("23:00"),
+  QUIET_HOURS_END: z.string().optional().default("09:00"),
+  DROPP_WEBHOOK_SECRET: z.string().optional().default(""),
 });
 
 export type AppEnv = z.infer<typeof envSchema> & { OPENAI_MODEL: string };
@@ -29,6 +32,10 @@ export function getEnv(): AppEnv {
     APP_TIMEZONE: process.env.APP_TIMEZONE,
     MEDIA_STORAGE_PATH: process.env.MEDIA_STORAGE_PATH,
     CRON_SECRET: process.env.CRON_SECRET,
+    QUIET_HOURS_START: process.env.QUIET_HOURS_START,
+    QUIET_HOURS_END: process.env.QUIET_HOURS_END,
+    // Bracket access stays dynamic so the production build does not bake in an empty secret.
+    DROPP_WEBHOOK_SECRET: process.env["DROPP_WEBHOOK_SECRET"],
   });
 
   if (!parsed.success) {

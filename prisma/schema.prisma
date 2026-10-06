@@ -41,6 +41,62 @@ enum TelegramUpdateStatus {
   FAILED
 }
 
+enum MemoryType {
+  PERSONAL_FACT
+  PREFERENCE
+  INTEREST
+  RELATIONSHIP
+  WORK
+  LOCATION
+  PET
+  ROUTINE
+  OTHER
+}
+
+enum EventStatus {
+  UPCOMING
+  PAST
+  CANCELLED
+  UNKNOWN
+}
+
+enum PromiseAuthor {
+  USER
+  AMY
+}
+
+enum PromiseStatus {
+  OPEN
+  FULFILLED
+  CANCELLED
+  EXPIRED
+}
+
+enum FollowUpReasonType {
+  EVENT
+  PROMISE
+  OTHER
+}
+
+enum FollowUpPhase {
+  BEFORE_EVENT
+  AFTER_EVENT
+}
+
+enum FollowUpStatus {
+  PENDING
+  SENT
+  CANCELLED
+  SKIPPED
+}
+
+enum InteractionDynamic {
+  UNKNOWN
+  DOMINANT_USER
+  DOMINANT_AMY
+  EQUAL
+}
+
 model User {
   id                  String            @id @default(cuid())
   telegramUserId      String            @unique
@@ -49,18 +105,37 @@ model User {
   lastName            String?
   languageCode        String?
   relationshipStage   RelationshipStage @default(NEW)
-  conversationSummary String?           @db.Text
-  aiEnabled           Boolean           @default(true)
-  proactiveEnabled    Boolean           @default(true)
-  messagesCount       Int               @default(0)
-  totalStarsSpent     Int               @default(0)
-  lastUserMessageAt   DateTime?
-  lastAmyMessageAt    DateTime?
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  interactionDynamic             InteractionDynamic @default(UNKNOWN)
+  interactionDynamicConfidence   Float              @default(0)
+  interactionDynamicEvidence     String?            @db.VarChar(200)
+  conversationSummary             String?           @db.Text
+  conversationSummaryThroughCount Int               @default(0)
+  timezone                        String?
+  deleteRequestedAt               DateTime?
+  aiEnabled                       Boolean           @default(true)
+  proactiveEnabled                Boolean           @default(true)
+  messagesCount                   Int               @default(0)
+  totalStarsSpent                 Int               @default(0)
+  lastUserMessageAt               DateTime?
+  lastAmyMessageAt                DateTime?
+  createdAt                       DateTime          @default(now())
+  updatedAt                       DateTime          @updatedAt
 
   conversations Conversation[]
   messages      Message[]
+  paymentIntents PaymentIntent[]
+  payments       Payment[]
+  memories      UserMemory[]
+  events        ImportantEvent[]
+  promises      UserPromise[]
+  followUps     FollowUp[]
+  salesDecisions SalesDecision[]
+  offerInteractions UserOfferInteraction[]
+  tipLinks TipLink[]
+  mediaSent MediaSent[]
+  freeMediaExecutions FreeMediaExecution[]
+  paidOfferExecutions PaidOfferExecution[]
+  paidContentDeliveries PaidContentDelivery[]
 
   @@index([lastUserMessageAt])
   @@index([relationshipStage])
@@ -71,12 +146,20 @@ model Conversation {
   userId                 String
   platform               String
   platformConversationId String
+  businessConnectionId   String?
   active                 Boolean  @default(true)
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages Message[]
+  paymentIntents PaymentIntent[]
+  salesDecisions SalesDecision[]
+  offerInteractions UserOfferInteraction[]
+  tipLinks TipLink[]
+  mediaSent MediaSent[]
+  freeMediaExecutions FreeMediaExecution[]
+  paidOfferExecutions PaidOfferExecution[]
 
   @@unique([platform, platformConversationId])
   @@index([userId])
@@ -97,11 +180,23 @@ model Message {
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  salesDecisions SalesDecision[]
+  tipLinks TipLink[]
 
   @@unique([conversationId, telegramMessageId])
   @@index([conversationId, createdAt])
   @@index([userId, createdAt])
   @@index([direction, createdAt])
+}
+
+model BusinessConnection {
+  connectionId   String   @id
+  businessUserId String
+  userChatId     String
+  isEnabled      Boolean
+  canReply       Boolean
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
 model TelegramUpdate {
@@ -113,4 +208,545 @@ model TelegramUpdate {
   updatedAt        DateTime             @updatedAt
 
   @@index([status, updatedAt])
+}
+
+model UserMemory {
+  id               String     @id @default(cuid())
+  userId           String
+  type             MemoryType
+  key              String
+  value            String     @db.Text
+  confidence       Float
+  importance       Float
+  sourceMessageId  String?
+  firstLearnedAt   DateTime   @default(now())
+  lastConfirmedAt  DateTime   @default(now())
+  lastUsedAt       DateTime?
+  active           Boolean    @default(true)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, active, importance])
+  @@index([userId, key, active])
+}
+
+model ImportantEvent {
+  id                String      @id @default(cuid())
+  userId            String
+  title             String
+  description       String?     @db.Text
+  eventAt           DateTime?
+  eventDate         String?
+  timeKnown         Boolean     @default(false)
+  timezone          String?
+  status            EventStatus @default(UNKNOWN)
+  emotionalContext  String?
+  sourceMessageId   String?
+  followUpEligible  Boolean     @default(false)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  followUps FollowUp[]
+
+  @@index([userId, status])
+  @@index([userId, eventAt])
+}
+
+model UserPromise {
+  id              String        @id @default(cuid())
+  userId          String
+  madeBy          PromiseAuthor
+  text            String        @db.Text
+  dueAt           DateTime?
+  status          PromiseStatus @default(OPEN)
+  sourceMessageId String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  followUps FollowUp[]
+
+  @@index([userId, status])
+}
+
+model FollowUp {
+  id          String             @id @default(cuid())
+  userId      String
+  reasonType  FollowUpReasonType
+  phase       FollowUpPhase?
+  eventId     String?
+  promiseId   String?
+  context     String             @db.Text
+  scheduledAt DateTime
+  status      FollowUpStatus     @default(PENDING)
+  sentAt      DateTime?
+  cancelledAt DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event   ImportantEvent? @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  promise UserPromise?    @relation(fields: [promiseId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledAt])
+  @@index([userId, status, scheduledAt])
+}
+
+/// Discovery capture for Dropp webhooks. Authentication stays UNVERIFIED until
+/// Dropp's signature method is documented. Rows are not payments and are not
+/// linked to Amy users.
+model DroppWebhookCapture {
+  id                  String   @id @default(cuid())
+  receivedAt          DateTime @default(now())
+  httpMethod          String   @db.VarChar(16)
+  contentType         String?  @db.VarChar(200)
+  bodyKind            String   @db.VarChar(32)
+  bodySha256          String   @db.VarChar(64)
+  bodyBytes           Int
+  headerNames         Json
+  signatureHeaders    Json
+  authorizationScheme String?  @db.VarChar(32)
+  cookieHeaderPresent Boolean  @default(false)
+  authentication      String   @default("UNVERIFIED") @db.VarChar(32)
+  topLevelKeys        Json
+  observedFields      Json
+  structure           Json
+  payload             Json
+  seenBefore          Boolean  @default(false)
+  createdAt           DateTime @default(now())
+
+  @@index([bodySha256, receivedAt])
+  @@index([receivedAt])
+}
+
+enum MediaType {
+  PHOTO
+  STICKER
+}
+
+enum MediaCategory {
+  selfie
+  home
+  work
+  luna
+  cosplay
+  morning
+  night
+  cute
+  flirty
+  casual
+  other
+}
+
+/// Free media uploaded by the owner through the technical bot. Paid Dropp files are not stored here.
+model MediaAsset {
+  id                      String        @id @default(cuid())
+  telegramFileId          String
+  telegramFileUniqueId    String        @unique
+  storagePath             String
+  mediaType               MediaType
+  category                MediaCategory
+  description             String        @db.VarChar(300)
+  tags                    String[]
+  mood                    String        @db.VarChar(40)
+  flirtLevel              Int
+  peopleCount             Int
+  hasAmy                  Boolean
+  hasLuna                 Boolean
+  contexts                String[]
+  notes                   String?       @db.VarChar(500)
+  active                  Boolean       @default(true)
+  availability            MediaAvailability @default(FREE)
+  deactivationRequestedAt DateTime?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+
+  salesDecisions SalesDecision[]
+  mediaSent MediaSent[]
+  offerMedia PaymentOfferMedia[]
+  paidContentDeliveries PaidContentDelivery[]
+
+  @@index([active, createdAt])
+  @@index([category, active])
+}
+
+enum PaymentOfferKind {
+  PAID_CONTENT
+  TIP
+  UNKNOWN
+}
+
+enum PaymentProvider {
+  TELEGRAM_STARS
+  DROPP
+}
+
+enum PaymentRecordStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+model PaymentOffer {
+  id          String            @id @default(cuid())
+  slug        String            @unique
+  title       String
+  description String?
+  kind        PaymentOfferKind
+  tags        String[]          @default([])
+  contexts    String[]          @default([])
+  flirtLevel  Int?
+  priority    Int               @default(0)
+  active      Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  prices       PaymentOfferPrice[]
+  intents      PaymentIntent[]
+  payments     Payment[]
+  salesDecisions SalesDecision[]
+  interactions UserOfferInteraction[]
+  executions   PaidOfferExecution[]
+  offerMedia   PaymentOfferMedia[]
+  paidContentDeliveries PaidContentDelivery[]
+  externalCheckouts PaymentOfferExternalCheckout[]
+
+  @@index([active, priority])
+}
+
+/// Public checkout mapping. externalLinkId stays null until Dropp itself exposes an identifier.
+model PaymentOfferExternalCheckout {
+  id             String          @id @default(cuid())
+  offerId        String
+  provider       PaymentProvider
+  checkoutUrl    String
+  externalLinkId String?
+  linkIdEvidence String          @default("unknown")
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  offer PaymentOffer @relation(fields: [offerId], references: [id], onDelete: Restrict)
+
+  @@unique([offerId, provider])
+  @@index([provider, externalLinkId])
+}
+
+model PaymentOfferPrice {
+  id        String          @id @default(cuid())
+  offerId   String
+  provider  PaymentProvider
+  amount    Int
+  currency  String
+  active    Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  offer PaymentOffer @relation(fields: [offerId], references: [id], onDelete: Restrict)
+
+  @@unique([offerId, provider, currency])
+  @@index([offerId, provider, active])
+}
+
+model PaymentIntent {
+  id                     String              @id @default(cuid())
+  provider               PaymentProvider
+  userId                 String
+  conversationId         String?
+  offerId                String
+  status                 PaymentRecordStatus @default(PENDING)
+  amount                 Int
+  currency               String
+  providerInvoicePayload String              @unique
+  providerOrderId        String?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  paidAt                 DateTime?
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  offer        PaymentOffer  @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  payments     Payment[]
+  executions   PaidOfferExecution[]
+
+  @@index([userId, offerId, status])
+}
+
+model Payment {
+  id                String              @id @default(cuid())
+  provider          PaymentProvider
+  userId            String
+  offerId           String
+  intentId          String
+  amount            Int
+  currency          String
+  status            PaymentRecordStatus
+  providerPaymentId String              @unique
+  providerOrderId   String?
+  paidAt            DateTime
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  user   User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  offer  PaymentOffer  @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  intent PaymentIntent @relation(fields: [intentId], references: [id], onDelete: Restrict)
+  paidContentDeliveries PaidContentDelivery[]
+
+  @@index([userId, offerId, status])
+}
+
+enum SalesEngineMode {
+  SHADOW
+  LIVE
+}
+
+enum SalesDecisionKind {
+  NO_OFFER
+  FREE_MEDIA
+  PAID_OFFER
+  SUPPRESS
+  TIP
+}
+
+enum SalesIntent {
+  NONE
+  MEDIA_REQUEST
+  PREMIUM_MEDIA_REQUEST
+  FLIRT
+  REACTION_TO_MEDIA
+  PURCHASE_DISCUSSION
+  TIP_DISCUSSION
+}
+
+enum CommercialReadiness {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum SalesEmotionalState {
+  NORMAL
+  SENSITIVE
+  DISTRESSED
+}
+
+enum UserOfferInteractionType {
+  SHOWN
+  OPENED
+  PURCHASED
+  DECLINED
+}
+
+enum UserOfferInteractionSource {
+  SALES_ENGINE
+  OWNER_TEST
+  PAYMENT
+}
+
+enum TipLinkStatus {
+  LINK_SENT
+  PAID
+}
+
+/// A donation link that was actually sent. LINK_SENT is not a payment. PAID is reserved for a verified Dropp webhook.
+model TipLink {
+  id               String        @id @default(cuid())
+  userId           String
+  conversationId   String
+  triggerMessageId String?
+  status           TipLinkStatus
+  createdAt        DateTime      @default(now())
+
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  triggerMessage Message?     @relation(fields: [triggerMessageId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, createdAt])
+}
+
+enum MediaAvailability {
+  FREE
+  LOCKED
+}
+
+enum PaymentOfferMediaRole {
+  PREVIEW
+  DELIVERABLE
+}
+
+/// A preview is safe to show before purchase. A deliverable stays locked until a real Payment exists.
+model PaymentOfferMedia {
+  id           String                @id @default(cuid())
+  offerId      String
+  mediaAssetId String
+  role         PaymentOfferMediaRole
+  position     Int
+  active       Boolean               @default(true)
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  offer      PaymentOffer          @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  mediaAsset MediaAsset            @relation(fields: [mediaAssetId], references: [id], onDelete: Restrict)
+  deliveries PaidContentDelivery[]
+
+  @@unique([offerId, mediaAssetId, role])
+  @@index([offerId, role, active, position])
+  @@index([mediaAssetId, role, active])
+}
+
+/// Written only after Telegram accepts a paid deliverable. A Payment row is not a delivery.
+model PaidContentDelivery {
+  id                  String   @id @default(cuid())
+  userId              String
+  offerId             String
+  paymentId           String
+  paymentOfferMediaId String
+  position            Int
+  telegramMessageId   String?
+  deliveredAt         DateTime @default(now())
+
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offer             PaymentOffer      @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  payment           Payment           @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  paymentOfferMedia PaymentOfferMedia @relation(fields: [paymentOfferMediaId], references: [id], onDelete: Restrict)
+  mediaAssetId      String
+  mediaAsset        MediaAsset        @relation(fields: [mediaAssetId], references: [id], onDelete: Restrict)
+
+  @@unique([paymentId, paymentOfferMediaId])
+  @@index([userId, offerId, deliveredAt])
+}
+
+enum MediaSentSource {
+  FREE_MEDIA
+  PAID_CONTENT
+  MANUAL
+  PROACTIVE
+}
+
+/// A media file Telegram accepted for this user. Selection and shadow decisions are not rows here.
+model MediaSent {
+  id                String          @id @default(cuid())
+  userId            String
+  conversationId    String
+  mediaAssetId      String
+  source            MediaSentSource
+  telegramMessageId String?
+  sentAt            DateTime        @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  mediaAsset   MediaAsset   @relation(fields: [mediaAssetId], references: [id], onDelete: Restrict)
+
+  @@index([userId, sentAt])
+  @@index([userId, mediaAssetId])
+  @@index([mediaAssetId])
+  @@index([conversationId])
+}
+
+enum FreeMediaExecutionStatus {
+  CLAIMED
+  SENT
+  FAILED
+  SKIPPED
+}
+
+/// One inbound turn may claim a free photo once. A row here is not proof of delivery.
+model FreeMediaExecution {
+  id                String                   @id @default(cuid())
+  triggerKey        String                   @unique
+  userId            String
+  conversationId    String
+  mediaAssetId      String?
+  telegramMessageId String?
+  status            FreeMediaExecutionStatus
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+enum PaidOfferExecutionStatus {
+  CLAIMED
+  SENT
+  FAILED
+  SKIPPED
+}
+
+/// One inbound turn may claim one paid-offer presentation. A row here is not proof the customer saw it.
+model PaidOfferExecution {
+  id                String                   @id @default(cuid())
+  triggerKey        String                   @unique
+  userId            String
+  conversationId    String
+  offerId           String?
+  paymentIntentId   String?                  @unique
+  telegramMessageId String?
+  status            PaidOfferExecutionStatus
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation   Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  offer          PaymentOffer?  @relation(fields: [offerId], references: [id], onDelete: SetNull)
+  paymentIntent  PaymentIntent? @relation(fields: [paymentIntentId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+}
+
+/// Observational sales log. Shadow rows are not offers that were shown.
+model SalesDecision {
+  id                    String               @id @default(cuid())
+  userId                String
+  conversationId        String
+  triggerMessageId      String?
+  mode                  SalesEngineMode
+  decision              SalesDecisionKind
+  confidence            Float
+  intent                SalesIntent
+  flirtLevel            Int
+  commercialReadiness   CommercialReadiness
+  emotionalState        SalesEmotionalState
+  desiredContexts       Json
+  candidateMediaAssetId String?
+  candidateOfferId      String?
+  reasonCode            String?              @db.VarChar(64)
+  reasonSummary         String?              @db.VarChar(200)
+  createdAt             DateTime             @default(now())
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation   Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  triggerMessage Message?       @relation(fields: [triggerMessageId], references: [id], onDelete: SetNull)
+  candidateMedia MediaAsset?    @relation(fields: [candidateMediaAssetId], references: [id], onDelete: SetNull)
+  candidateOffer PaymentOffer?  @relation(fields: [candidateOfferId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([decision, createdAt])
+}
+
+/// Real offer interactions. A shadow decision must not insert SHOWN.
+model UserOfferInteraction {
+  id             String                     @id @default(cuid())
+  userId         String
+  offerId        String
+  conversationId String?
+  type           UserOfferInteractionType
+  source         UserOfferInteractionSource
+  metadata       Json?
+  createdAt      DateTime                   @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offer        PaymentOffer  @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([userId, offerId, type, createdAt])
+  @@index([userId, type, createdAt])
 }

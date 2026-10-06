@@ -29,10 +29,18 @@ export class TransportDeliveryError extends Error {
   }
 }
 
+export type DeliveryContext = {
+  businessConnectionId?: string | null;
+};
+
 export interface MessagingTransport {
   readonly name: TransportName;
-  sendText(chatId: string, text: string): Promise<OutboundRef>;
+  sendText(chatId: string, text: string, context?: DeliveryContext): Promise<OutboundRef>;
   sendMedia(chatId: string, media: OutboundMedia): Promise<OutboundRef>;
-  sendTyping(chatId: string): Promise<void>;
+  sendBusinessPhoto(
+    chatId: string,
+    photo: { businessConnectionId: string; telegramFileId?: string | null; bytes?: Buffer | null },
+  ): Promise<OutboundRef>;
+  sendTyping(chatId: string, context?: DeliveryContext): Promise<void>;
   identifyUser(payload: unknown): TransportIdentity | null;
 }

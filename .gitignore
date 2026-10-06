@@ -21,3 +21,9 @@ data/*
 !data/amy-media/
 data/amy-media/*
 !data/amy-media/.gitkeep
+
+# Temporary MTProto user session from scripts/connect-amy-business-bot.ts
+*.session
+
+# Private paid-pack source photos. Imported copies live in media storage.
+import-paid-packs/
