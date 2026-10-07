@@ -8,6 +8,25 @@ import { selectRelevantMemories } from "@/services/memory/store";
 import { proactiveSendDecision, zoneFor } from "@/services/continuity/time";
 
 const BATCH_LIMIT = 3;
+export const CONVERSATIONAL_FOLLOWUP_TTL_MS = 6 * 60 * 60 * 1000;
+export const MAX_FOLLOWUP_RETRIES = 3;
+export const RETRY_BACKOFF_MS = [15 * 60 * 1000, 30 * 60 * 1000];
+
+export function isFollowUpStale(
+  item: {
+    createdAt: Date;
+    reasonType: import("@prisma/client").FollowUpReasonType;
+    event?: { eventAt: Date | null } | null;
+  },
+  now: Date,
+): boolean {
+  if (item.reasonType !== "OTHER") {
+    // EVENT (including future eventAt and AFTER_EVENT) and PROMISE keep their
+    // own schedule. Conversational TTL applies only to OTHER check-ins.
+    return false;
+  }
+  return now.getTime() - item.createdAt.getTime() > CONVERSATIONAL_FOLLOWUP_TTL_MS;
+}
 
 export async function runDueFollowUps(input: {
   now?: Date;
@@ -16,17 +35,37 @@ export async function runDueFollowUps(input: {
   quietStart?: string;
   quietEnd?: string;
   generate?: typeof generateProactive;
+  userId?: string;
 }): Promise<{ sentUsers: number; skipped: number }> {
   const now = input.now ?? new Date();
+  const expired = await prisma.followUp.updateMany({
+    where: {
+      status: "PENDING",
+      reasonType: "OTHER",
+      createdAt: { lte: new Date(now.getTime() - CONVERSATIONAL_FOLLOWUP_TTL_MS) },
+      ...(input.userId ? { userId: input.userId } : {}),
+    },
+    data: { status: "CANCELLED", cancelledAt: now },
+  });
+  if (expired.count > 0) {
+    logger.info("followup.stale_cancelled", { count: expired.count });
+  }
+
   const due = await prisma.followUp.findMany({
-    where: { status: "PENDING", scheduledAt: { lte: now } },
+    where: {
+      status: "PENDING",
+      scheduledAt: { lte: now },
+      ...(input.userId ? { userId: input.userId } : {}),
+    },
     orderBy: { scheduledAt: "asc" },
     take: 40,
     include: { event: true, promise: true },
   });
 
+  const activeDue = due.filter((item) => !isFollowUpStale(item, now));
+
   const grouped = new Map<string, typeof due>();
-  for (const item of due) {
+  for (const item of activeDue) {
     const list = grouped.get(item.userId) ?? [];
     list.push(item);
     grouped.set(item.userId, list);
@@ -91,13 +130,21 @@ export async function runDueFollowUps(input: {
         generate: input.generate ?? generateProactive,
         now,
       });
+      await prisma.followUp.updateMany({
+        where: { id: { in: claimed }, status: "SENT" },
+        data: { sendAttempts: 0 },
+      });
       sentUsers += 1;
       logger.info("followup.sent", { userId, count: claimed.length });
     } catch (error) {
-      await prisma.followUp.updateMany({
-        where: { id: { in: claimed }, status: "SENT", sentAt: now },
-        data: { status: "PENDING", sentAt: null },
-      });
+      for (const item of claimedItems) {
+        const outcome = await recordSendFailure(item.id, now);
+        if (outcome === "cancelled") {
+          logger.warn("followup.cancelled_max_retries", { followUpId: item.id, userId });
+        } else if (outcome === "retried") {
+          logger.info("followup.rescheduled_retry", { followUpId: item.id, userId });
+        }
+      }
       logger.error("followup.sent", {
         userId,
         failed: true,
@@ -107,6 +154,40 @@ export async function runDueFollowUps(input: {
   }
 
   return { sentUsers, skipped };
+}
+
+async function recordSendFailure(id: string, now: Date): Promise<"retried" | "cancelled" | "ignored"> {
+  const first = await prisma.followUp.updateMany({
+    where: { id, status: "SENT", sendAttempts: 0 },
+    data: {
+      status: "PENDING",
+      sentAt: null,
+      scheduledAt: new Date(now.getTime() + RETRY_BACKOFF_MS[0]),
+      sendAttempts: { increment: 1 },
+    },
+  });
+  if (first.count === 1) return "retried";
+
+  const second = await prisma.followUp.updateMany({
+    where: { id, status: "SENT", sendAttempts: 1 },
+    data: {
+      status: "PENDING",
+      sentAt: null,
+      scheduledAt: new Date(now.getTime() + RETRY_BACKOFF_MS[1]),
+      sendAttempts: { increment: 1 },
+    },
+  });
+  if (second.count === 1) return "retried";
+
+  const cancelled = await prisma.followUp.updateMany({
+    where: { id, status: "SENT" },
+    data: {
+      status: "CANCELLED",
+      cancelledAt: now,
+      sendAttempts: { increment: 1 },
+    },
+  });
+  return cancelled.count === 1 ? "cancelled" : "ignored";
 }
 
 async function claimFollowUps(ids: string[], now: Date): Promise<string[]> {

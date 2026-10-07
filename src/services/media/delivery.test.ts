@@ -65,14 +65,15 @@ test("a successful delivery starts the free-media cooldown and an explicit reque
     assert.equal(cooled.decision, "SUPPRESS");
     assert.equal(cooled.reasonCode, "free_media_cooldown");
 
+    // Explicit request must ALSO be cooled down!
     await observeSalesTurn(turn(user.id, conversation.id, ["send me a pic"]), { mode: "shadow", now: NOW });
     const explicit = await prisma.salesDecision.findFirstOrThrow({ where: { userId: user.id }, orderBy: { createdAt: "desc" } });
     assert.equal(explicit.decision, "SUPPRESS");
     assert.equal(explicit.reasonCode, "free_media_cooldown");
     assert.equal(await prisma.mediaSent.count({ where: { userId: user.id } }), 1);
 
-    // After cooldown expired (61 minutes after NOW = 71 minutes after sentAt > 60 min cooldown), explicit request is allowed for unseen second asset
-    const afterCooldown = new Date(NOW.getTime() + 61 * 60 * 1000);
+    // After 16 minutes (cooldown expired), explicit request is allowed for unseen second asset
+    const afterCooldown = new Date(NOW.getTime() + 16 * 60 * 1000);
     await observeSalesTurn(turn(user.id, conversation.id, ["send me a pic"]), { mode: "shadow", now: afterCooldown });
     const after = await prisma.salesDecision.findFirstOrThrow({ where: { userId: user.id }, orderBy: { createdAt: "desc" } });
     assert.equal(after.decision, "FREE_MEDIA");

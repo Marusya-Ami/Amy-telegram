@@ -5,7 +5,7 @@ export const salesConfig = {
   paidOfferWindowMs: 24 * 60 * 60 * 1000,
   sameOfferReshowAfterMs: 7 * 24 * 60 * 60 * 1000,
   declineSuppressMs: 7 * 24 * 60 * 60 * 1000,
-  freeMediaMinIntervalMs: 60 * 60 * 1000,
+  freeMediaMinIntervalMs: 15 * 60 * 1000,
   paidOfferMinConfidence: 0.8,
   tipLinkCooldownMs: 24 * 60 * 60 * 1000,
   contextMessageLimit: 8,

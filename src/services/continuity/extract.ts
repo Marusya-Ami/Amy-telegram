@@ -72,7 +72,9 @@ Memory types must be exactly PERSONAL_FACT, PREFERENCE, INTEREST, RELATIONSHIP, 
 Example: {"memories":[{"type":"PERSONAL_FACT","key":"name","value":"Alex","confidence":0.95,"importance":0.9,"replacesKey":null}],"events":[],"promises":[],"timezone":null}
 Rules:
 - "my name is Alex", "I'm Alex", and "call me Alex" are PERSONAL_FACT key "name", confidence at least 0.9, importance at least 0.8.
-- "I work in real estate", "I'm a realtor", and "I work as a designer" are WORK key "occupation", confidence at least 0.9. Being at a place is not a job.
+- Never extract teasing nicknames, adjectives, self-descriptions, or negations as names (e.g. "don't call me drama boy", "I am fun person", "I am a single guy" must NOT produce name=Drama or name=Fun).
+- "I work in real estate", "I'm a realtor", and "I work as a designer" are WORK key "occupation", confidence at least 0.9. Being at a place or getting food is not a job (e.g. "dinner from my job" is NOT an occupation).
+- Family members (mom, mother, dad, father, sister, brother, parents, children, etc.) must NEVER be classified as PET. Classify family under RELATIONSHIP. Only actual animals belong under PET.
 - A named pet is one PET memory, key "pet". Include breed and name in the value when both were said, such as "golden retriever named Charlie".
 - Empty arrays are correct for small talk. Do not store "lol", "bored", "yes", "okay", or momentary actions.
 - Do not infer sensitive attributes.

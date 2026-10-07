@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { prepareExtraction } from "@/services/continuity/classify";
+import { explicitMemories, prepareExtraction } from "@/services/continuity/classify";
 import { parseContinuityExtraction, type ContinuityExtraction } from "@/services/continuity/schema";
 import {
   isQuietHour,
@@ -409,6 +409,7 @@ test("a second scheduler run does not send the follow-up again", async () => {
     const input = {
       now: NOW,
       appTimeZone: ZONE,
+      userId: ids.userId,
       transport: {
         name: "telegram-bot" as const,
         sendText: async (_chatId: string, text: string) => {
@@ -559,6 +560,7 @@ test("proactive off blocks a follow-up and chat still replies", async () => {
     const result = await runDueFollowUps({
       now: NOW,
       appTimeZone: ZONE,
+      userId: ids.userId,
       transport: {
         name: "telegram-bot" as const,
         sendText: async () => {
@@ -1053,6 +1055,7 @@ test("recent chatting blocks a due follow-up and a same-event pair can still sen
     const result = await runDueFollowUps({
       now: NOW,
       appTimeZone: ZONE,
+      userId: ids.userId,
       transport: {
         name: "telegram-bot",
         sendText: async () => {
@@ -1113,6 +1116,193 @@ test("follow-up timing stays after an exact event and away from quiet hours", ()
   });
   assert.equal(isQuietHour(new Date(new Date("2026-09-23T03:30:00.000Z").getTime() + 2 * 60 * 60 * 1000), ZONE), true);
   assert.equal(late.toISOString(), "2026-09-23T14:00:00.000Z");
+});
+
+test("Charlie regression: 'don't call me drama boy' does not produce name=Drama", () => {
+  const texts = ["don't call me drama boy", "please do not call me drama boy"];
+  const mems = explicitMemories(texts);
+  assert.equal(mems.some((m) => m.key === "name" && m.value.toLowerCase().includes("drama")), false);
+
+  const prepared = prepareExtraction({
+    llm: extraction({
+      memories: [{ type: "PERSONAL_FACT", key: "name", value: "Drama", confidence: 0.9, importance: 0.9, replacesKey: null }],
+    }),
+    userTexts: ["don't call me drama boy"],
+  });
+  assert.equal(prepared.memories.some((m) => m.key === "name" && m.value.toLowerCase().includes("drama")), false);
+});
+
+test("Charlie regression: 'I am fun person' does not produce name=Fun", () => {
+  const texts = ["I am fun person", "I'm fun person"];
+  const mems = explicitMemories(texts);
+  assert.equal(mems.some((m) => m.key === "name" && m.value.toLowerCase().includes("fun")), false);
+
+  const prepared = prepareExtraction({
+    llm: extraction({
+      memories: [{ type: "PERSONAL_FACT", key: "name", value: "Fun", confidence: 0.9, importance: 0.9, replacesKey: null }],
+    }),
+    userTexts: ["I am fun person"],
+  });
+  assert.equal(prepared.memories.some((m) => m.key === "name" && m.value.toLowerCase().includes("fun")), false);
+});
+
+test("Charlie regression: mom/father/sister/brother are never classified as PET", () => {
+  const familyExamples = [
+    { type: "PET" as const, key: "mom", value: "taking care of mom" },
+    { type: "PET" as const, key: "mother", value: "my mother visited" },
+    { type: "PET" as const, key: "father", value: "father" },
+    { type: "PET" as const, key: "sister", value: "sister" },
+    { type: "PET" as const, key: "brother", value: "brother" },
+  ];
+  for (const item of familyExamples) {
+    const prepared = prepareExtraction({
+      llm: extraction({
+        memories: [{ ...item, confidence: 0.9, importance: 0.9, replacesKey: null }],
+      }),
+      userTexts: ["my family"],
+    });
+    const found = prepared.memories.find((m) => m.value === item.value || m.key === item.key);
+    assert.ok(found, `Expected memory for ${item.key}`);
+    assert.notEqual(found.type, "PET", `Family member ${item.key} must NEVER have type PET`);
+    assert.equal(found.type, "RELATIONSHIP");
+  }
+});
+
+test("Charlie regression: 'dinner from my job' is not an occupation", () => {
+  const texts = ["dinner from my job"];
+  const mems = explicitMemories(texts);
+  assert.equal(mems.some((m) => m.key === "occupation" && m.value.includes("dinner")), false);
+
+  const prepared = prepareExtraction({
+    llm: extraction({
+      memories: [{ type: "WORK", key: "occupation", value: "dinner from my job", confidence: 0.9, importance: 0.9, replacesKey: null }],
+    }),
+    userTexts: ["dinner from my job"],
+  });
+  assert.equal(prepared.memories.some((m) => m.key === "occupation" && m.value.includes("dinner")), false);
+});
+
+test("Tom regression: stale failed follow-up expires past 6-hour createdAt TTL", async () => {
+  const { prisma } = await import("@/lib/db/prisma");
+  const { runDueFollowUps } = await import("@/services/followups/runDue");
+  const ids = await seed(prisma, "stale-ttl");
+  try {
+    const sevenHoursAgo = new Date(NOW.getTime() - 7 * 60 * 60 * 1000);
+    const staleFollowUp = await prisma.followUp.create({
+      data: {
+        userId: ids.userId,
+        reasonType: "OTHER",
+        context: "check in on Tom",
+        createdAt: sevenHoursAgo,
+        scheduledAt: NOW,
+        status: "PENDING",
+      },
+    });
+
+    let sent = false;
+    await runDueFollowUps({
+      now: NOW,
+      userId: ids.userId,
+      transport: {
+        name: "telegram-bot" as const,
+        sendText: async () => {
+          sent = true;
+          return { messageId: "stale" };
+        },
+        sendMedia: async () => { throw new Error("unused"); },
+        sendBusinessPhoto: async () => { throw new Error("unused"); },
+        sendTyping: async () => undefined,
+        identifyUser: () => null,
+      },
+      appTimeZone: ZONE,
+      generate: async () => ["hey Tom"],
+    });
+
+    assert.equal(sent, false);
+    const updated = await prisma.followUp.findUniqueOrThrow({ where: { id: staleFollowUp.id } });
+    assert.equal(updated.status, "CANCELLED");
+    assert.ok(updated.cancelledAt);
+  } finally {
+    await cleanup(prisma, ids.userId);
+  }
+});
+
+test("Tom regression: transport failure does not retry every minute and cancels after bounded retries", async () => {
+  const { prisma } = await import("@/lib/db/prisma");
+  const { runDueFollowUps } = await import("@/services/followups/runDue");
+  const ids = await seed(prisma, "retry-backoff");
+  try {
+    const followUp = await prisma.followUp.create({
+      data: {
+        userId: ids.userId,
+        reasonType: "OTHER",
+        context: "check in on Tom",
+        scheduledAt: NOW,
+        status: "PENDING",
+      },
+    });
+
+    const failingTransport = {
+      name: "telegram-bot" as const,
+      sendText: async () => {
+        throw new Error("BUSINESS_PEER_INVALID");
+      },
+      sendMedia: async () => { throw new Error("unused"); },
+      sendBusinessPhoto: async () => { throw new Error("unused"); },
+      sendTyping: async () => undefined,
+      identifyUser: () => null,
+    };
+
+    await runDueFollowUps({
+      now: NOW,
+      transport: failingTransport,
+      appTimeZone: ZONE,
+      userId: ids.userId,
+      generate: async () => ["hey Tom"],
+    });
+
+    let row = await prisma.followUp.findUniqueOrThrow({ where: { id: followUp.id } });
+    assert.equal(row.status, "PENDING");
+    assert.equal(row.sentAt, null);
+    assert.equal(row.sendAttempts, 1);
+    assert.equal(row.scheduledAt.getTime(), NOW.getTime() + 15 * 60 * 1000);
+
+    const oneMinuteLater = new Date(NOW.getTime() + 60 * 1000);
+    const dueOneMinuteLater = await prisma.followUp.findMany({
+      where: { id: followUp.id, status: "PENDING", scheduledAt: { lte: oneMinuteLater } },
+    });
+    assert.equal(dueOneMinuteLater.length, 0);
+
+    const fifteenMinutesLater = new Date(NOW.getTime() + 15 * 60 * 1000);
+    await runDueFollowUps({
+      now: fifteenMinutesLater,
+      transport: failingTransport,
+      appTimeZone: ZONE,
+      userId: ids.userId,
+      generate: async () => ["hey Tom"],
+    });
+
+    row = await prisma.followUp.findUniqueOrThrow({ where: { id: followUp.id } });
+    assert.equal(row.status, "PENDING");
+    assert.equal(row.sendAttempts, 2);
+    assert.equal(row.scheduledAt.getTime(), fifteenMinutesLater.getTime() + 30 * 60 * 1000);
+
+    const fortyFiveMinutesLater = new Date(fifteenMinutesLater.getTime() + 30 * 60 * 1000);
+    await runDueFollowUps({
+      now: fortyFiveMinutesLater,
+      transport: failingTransport,
+      appTimeZone: ZONE,
+      userId: ids.userId,
+      generate: async () => ["hey Tom"],
+    });
+
+    row = await prisma.followUp.findUniqueOrThrow({ where: { id: followUp.id } });
+    assert.equal(row.status, "CANCELLED");
+    assert.ok(row.cancelledAt);
+    assert.equal(row.sendAttempts, 3);
+  } finally {
+    await cleanup(prisma, ids.userId);
+  }
 });
 
 function extraction(partial: Partial<ContinuityExtraction>): ContinuityExtraction {

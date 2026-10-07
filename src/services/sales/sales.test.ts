@@ -45,6 +45,121 @@ test("asking what Amy is wearing is not a paid offer", () => {
   assert.equal(decision.candidateOfferId, null);
 });
 
+test("Tom regression: German underwear request routes to PAID_OFFER", () => {
+  const variations = [
+    "Zeigst du mir dein Höschen?",
+    "zeig mir dein höschen",
+    "hast du Bilder in Unterwäsche?",
+    "hast du Dessous Fotos?",
+    "schick mir ein nacktbild",
+    "bist du nackt?",
+  ];
+  for (const text of variations) {
+    const decision = decideText(text);
+    assert.equal(decision.signal.intent, "PREMIUM_MEDIA_REQUEST", `Failed on: ${text}`);
+    assert.equal(decision.signal.commercialReadiness, "HIGH", `Failed on: ${text}`);
+    assert.equal(decision.decision, "PAID_OFFER", `Failed on: ${text}`);
+    assert.equal(decision.candidateSlug, "shower-time");
+  }
+});
+
+test("Tom regression: German hotter/private request routes to PAID_OFFER", () => {
+  const variations = [
+    "hast du ein heißeres Bild?",
+    "hast du ein heisseres Bild?",
+    "ich möchte private Fotos sehen",
+    "hast du exklusive Fotos?",
+    "kann ich das freischalten?",
+    "was kostet das?",
+    "wieviel kostet das freischalten?",
+  ];
+  for (const text of variations) {
+    const decision = decideText(text);
+    assert.ok(
+      decision.signal.intent === "PREMIUM_MEDIA_REQUEST" || decision.signal.intent === "PURCHASE_DISCUSSION",
+      `Failed on: ${text}`,
+    );
+    assert.equal(decision.signal.commercialReadiness, "HIGH", `Failed on: ${text}`);
+    assert.equal(decision.decision, "PAID_OFFER", `Failed on: ${text}`);
+    assert.equal(decision.candidateSlug, "shower-time");
+  }
+});
+
+test("Tom regression: explicit casual normal photo request routes to FREE_MEDIA", () => {
+  const variations = [
+    "Schick mir ein Foto",
+    "Kann ich ein Bild sehen?",
+    "Kann ich ein Foto von dir sehen?",
+    "Zeig mir ein Bild",
+  ];
+  for (const text of variations) {
+    const decision = decideText(text);
+    assert.equal(decision.signal.intent, "MEDIA_REQUEST", `Failed on: ${text}`);
+    assert.equal(decision.signal.commercialReadiness, "LOW", `Failed on: ${text}`);
+    assert.equal(decision.decision, "FREE_MEDIA", `Failed on: ${text}`);
+    assert.equal(decision.candidateMediaAssetId, "media-home");
+  }
+});
+
+test("Tom regression: 3 rapid explicit free requests cannot produce 3 free photos", () => {
+  // First request: no prior free media -> FREE_MEDIA
+  const t0 = NOW;
+  const d1 = decideText("send me a pic", { now: t0, priorFreeMediaAt: null });
+  assert.equal(d1.decision, "FREE_MEDIA");
+
+  // Second request: 10 seconds later, explicit request -> SUPPRESS (cooldown)
+  const t1 = new Date(t0.getTime() + 10 * 1000);
+  const d2 = decideText("send me another pic", { now: t1, priorFreeMediaAt: t0 });
+  assert.equal(d2.decision, "SUPPRESS");
+  assert.equal(d2.reasonCode, "free_media_cooldown");
+
+  // Third request: 60 seconds later, explicit request -> SUPPRESS (cooldown)
+  const t2 = new Date(t0.getTime() + 60 * 1000);
+  const d3 = decideText("give me a photo please", { now: t2, priorFreeMediaAt: t0 });
+  assert.equal(d3.decision, "SUPPRESS");
+  assert.equal(d3.reasonCode, "free_media_cooldown");
+});
+
+test("Tom regression: exhausted free library does not recycle previous media", () => {
+  const assetA: MediaCandidate = {
+    id: "media-a",
+    category: "selfie",
+    tags: ["casual_selfie"],
+    mood: "relaxed",
+    flirtLevel: 1,
+    contexts: ["casual_selfie"],
+    active: true,
+  };
+  const deliveries = [{ mediaAssetId: "media-a", sentAt: new Date(NOW.getTime() - 30 * 60 * 1000) }];
+  const decision = decideText("send me a pic", {
+    assets: [assetA],
+    mediaDeliveries: deliveries,
+    priorFreeMediaAt: new Date(NOW.getTime() - 30 * 60 * 1000), // outside 15m cooldown
+  });
+  // Must NOT recycle media-a! Must return NO_OFFER
+  assert.equal(decision.decision, "NO_OFFER");
+  assert.equal(decision.reasonCode, "no_matching_media");
+  assert.equal(decision.candidateMediaAssetId, null);
+});
+
+test("Charlie regression: 'Do you want to see a new picture of me' produces no outbound media", () => {
+  const variations = [
+    "Do you want to see a new picture of me?",
+    "Want to see me?",
+    "Can I send you my picture?",
+    "Let me show you a photo",
+    "Willst du ein Foto von mir sehen?",
+    "Kann ich dir ein Bild von mir schicken?",
+  ];
+  for (const text of variations) {
+    const decision = decideText(text);
+    assert.equal(decision.signal.mediaInterest, false, `Failed on: ${text}`);
+    assert.equal(decision.signal.explicitMediaRequest, false, `Failed on: ${text}`);
+    assert.equal(decision.decision, "NO_OFFER", `Failed on: ${text}`);
+    assert.equal(decision.candidateMediaAssetId, null, `Failed on: ${text}`);
+  }
+});
+
 test("a private photo request selects the active offer", () => {
   const decision = decideText("do you have any private pics?");
   assert.equal(decision.signal.intent, "PREMIUM_MEDIA_REQUEST");
@@ -509,6 +624,7 @@ function decideText(
     purchasedOfferIds: extra.purchasedOfferIds ?? new Set<string>(),
     interactions: extra.interactions ?? [],
     priorFreeMediaAt: extra.priorFreeMediaAt ?? null,
+    mediaDeliveries: extra.mediaDeliveries,
     dynamic: extra.dynamic ?? "UNKNOWN",
     dynamicConfidence: extra.dynamicConfidence ?? 0,
     now: extra.now ?? NOW,

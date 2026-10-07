@@ -42,9 +42,57 @@ const NOT_A_NAME = new Set([
   "kind",
   "really",
   "very",
+  "fun",
+  "drama",
+  "single",
+  "normal",
+  "nice",
+  "bad",
+  "cool",
+  "super",
+  "sweet",
+  "smart",
+  "dumb",
+  "weird",
+  "crazy",
+  "chill",
 ]);
 
 const SPECIES = new Set(["dog", "cat", "puppy", "kitten", "bird", "pet", "pup"]);
+
+const FAMILY_WORDS = new Set([
+  "mom",
+  "mother",
+  "dad",
+  "father",
+  "parent",
+  "parents",
+  "sister",
+  "sisters",
+  "brother",
+  "brothers",
+  "sibling",
+  "siblings",
+  "son",
+  "daughter",
+  "grandma",
+  "grandmother",
+  "grandpa",
+  "grandfather",
+  "aunt",
+  "uncle",
+  "cousin",
+  "niece",
+  "nephew",
+  "stepmom",
+  "stepdad",
+]);
+
+const INVALID_OCCUPATION_WORDS = /\b(dinner|lunch|breakfast|food|meal|snack|break|eating|bought|got|brought)\b/i;
+
+function containsFamilyWord(text: string): boolean {
+  return text.toLowerCase().split(/\W+/).some((token) => FAMILY_WORDS.has(token));
+}
 
 export type UpcomingHint = {
   title: string;
@@ -60,7 +108,8 @@ export function prepareExtraction(input: {
   const llm = input.llm ?? emptyExtraction();
   const current = input.userTexts.map((text) => text.trim()).filter(Boolean);
   const recent = (input.recentUserTexts ?? []).map((text) => text.trim()).filter(Boolean);
-  const memories = mergeMemories(explicitMemories(current), llm.memories);
+  const merged = mergeMemories(explicitMemories(current), llm.memories);
+  const memories = normalizeMemories(merged);
   const events = resolveEvents(llm.events, current, recent, input.upcomingEvents ?? []);
   return {
     memories: memories.slice(0, 8),
@@ -68,6 +117,43 @@ export function prepareExtraction(input: {
     promises: llm.promises,
     timezone: llm.timezone,
   };
+}
+
+function normalizeMemories(memories: ContinuityExtraction["memories"]): ContinuityExtraction["memories"] {
+  const result: ContinuityExtraction["memories"] = [];
+  for (const mem of memories) {
+    let type = mem.type;
+    let key = mem.key;
+    const { value, confidence, importance } = mem;
+    const keyLower = key.toLowerCase();
+    const valLower = value.toLowerCase();
+
+    if (keyLower === "name") {
+      if (
+        NOT_A_NAME.has(valLower) ||
+        /\b(?:fun|drama|person|guy|man|woman|boy|girl)\b/i.test(value)
+      ) {
+        continue;
+      }
+    }
+
+    const isFamily = containsFamilyWord(keyLower) || containsFamilyWord(valLower);
+    if (type === "PET" && isFamily) {
+      type = "RELATIONSHIP";
+      if (keyLower === "pet" || keyLower === "dog" || keyLower === "cat" || keyLower === "puppy") {
+        key = "family";
+      }
+    }
+
+    if (type === "WORK" && (keyLower === "occupation" || keyLower === "job")) {
+      if (INVALID_OCCUPATION_WORDS.test(value) || value.trim().length < 2) {
+        continue;
+      }
+    }
+
+    result.push({ ...mem, type, key, value, confidence, importance });
+  }
+  return result;
 }
 
 export function explicitMemories(texts: string[]): ContinuityExtraction["memories"] {
@@ -84,12 +170,27 @@ export function explicitMemories(texts: string[]): ContinuityExtraction["memorie
 }
 
 function explicitName(text: string): string | null {
-  const named = text.match(/\bmy name is ([A-Za-z][A-Za-z'-]{1,30})\b/);
-  if (named?.[1]) return cleanName(named[1]);
+  if (/\b(?:don'?t|do not|never|stop|please don'?t)\s+(?:call me|calling me)\b/i.test(text)) {
+    return null;
+  }
+  const named = text.match(/\bmy name is ([A-Za-z][A-Za-z'-]{1,30})\b/i);
+  if (named?.[1] && !NOT_A_NAME.has(named[1].toLowerCase())) return cleanName(named[1]);
+
   const called = text.match(/\bcall me ([A-Za-z][A-Za-z'-]{1,30})\b/i);
-  if (called?.[1]) return cleanName(called[1]);
+  if (called?.[1]) {
+    const candidate = called[1].toLowerCase();
+    if (!NOT_A_NAME.has(candidate) && !/\bcall me [A-Za-z'-]+\s+(?:boy|girl|man|woman|guy|dude|baby|sweetheart|names|person)\b/i.test(text)) {
+      return cleanName(called[1]);
+    }
+  }
+
   const shortened = text.match(/\bi(?:'m| am) ([A-Za-z][A-Za-z'-]{1,30})\b/i);
-  if (shortened?.[1] && !NOT_A_NAME.has(shortened[1].toLowerCase())) return cleanName(shortened[1]);
+  if (shortened?.[1]) {
+    const candidate = shortened[1].toLowerCase();
+    if (!NOT_A_NAME.has(candidate) && !/\bi(?:'m| am)\s+[A-Za-z'-]+\s+(?:person|guy|man|woman|boy|girl|dude|one|human)\b/i.test(text)) {
+      return cleanName(shortened[1]);
+    }
+  }
   return null;
 }
 
@@ -103,7 +204,9 @@ function explicitOccupation(text: string): string | null {
     const match = text.match(pattern);
     if (!match?.[1]) continue;
     const value = match[1].replace(/[.!?,].*$/, "").trim();
-    if (value && !NOT_A_NAME.has(value.toLowerCase())) return value;
+    if (value && !NOT_A_NAME.has(value.toLowerCase()) && !INVALID_OCCUPATION_WORDS.test(value)) {
+      return value;
+    }
   }
   return null;
 }
