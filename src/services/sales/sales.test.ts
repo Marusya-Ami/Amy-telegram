@@ -142,6 +142,53 @@ test("Tom regression: exhausted free library does not recycle previous media", (
   assert.equal(decision.candidateMediaAssetId, null);
 });
 
+test("Charlie regression: 'Can I see a picture of Luna' with no Luna asset produces no media", () => {
+  const kitchenPhoto: MediaCandidate = {
+    id: "kitchen-baking",
+    category: "cute",
+    tags: ["baking", "kitchen"],
+    mood: "playful",
+    flirtLevel: 1,
+    contexts: ["kitchen", "cooking"],
+    active: true,
+    hasLuna: false,
+  };
+  const decision = decideText("Can I see a picture of Luna", {
+    assets: [kitchenPhoto],
+  });
+  assert.equal(decision.decision, "NO_OFFER");
+  assert.equal(decision.reasonCode, "no_matching_media");
+  assert.equal(decision.candidateMediaAssetId, null);
+});
+
+test("Charlie regression: 'Can I see a picture of Luna' with hasLuna=true asset selects Luna asset", () => {
+  const kitchenPhoto: MediaCandidate = {
+    id: "kitchen-baking",
+    category: "cute",
+    tags: ["baking", "kitchen"],
+    mood: "playful",
+    flirtLevel: 1,
+    contexts: ["kitchen", "cooking"],
+    active: true,
+    hasLuna: false,
+  };
+  const lunaPhoto: MediaCandidate = {
+    id: "luna-dog",
+    category: "cute",
+    tags: ["luna", "dog"],
+    mood: "happy",
+    flirtLevel: 1,
+    contexts: ["luna", "park"],
+    active: true,
+    hasLuna: true,
+  };
+  const decision = decideText("Can I see a picture of Luna", {
+    assets: [kitchenPhoto, lunaPhoto],
+  });
+  assert.equal(decision.decision, "FREE_MEDIA");
+  assert.equal(decision.candidateMediaAssetId, "luna-dog");
+});
+
 test("Charlie regression: 'Do you want to see a new picture of me' produces no outbound media", () => {
   const variations = [
     "Do you want to see a new picture of me?",

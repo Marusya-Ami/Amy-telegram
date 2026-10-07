@@ -1,6 +1,7 @@
 import type { InteractionDynamic, UserOfferInteractionSource } from "@prisma/client";
 import { salesConfig } from "@/services/sales/config";
 import { capOrdinaryFlirt, type SalesSignal } from "@/services/sales/schema";
+import { hasSpecificMediaContext } from "@/services/media/context";
 
 export type SalesDecisionName = "NO_OFFER" | "FREE_MEDIA" | "PAID_OFFER" | "SUPPRESS" | "TIP";
 
@@ -330,7 +331,12 @@ function scoreMedia(
   const mood = signal.desiredContexts.some((context) => asset.mood.toLowerCase().includes(context)) ? 1 : 0;
   const topical = contexts * 5 + tags * 2 + category + mood;
   if (topical === 0) {
-    if (!wantsLuna && signal.explicitMediaRequest && ["selfie", "casual", "cute", "flirty", "home"].includes(asset.category)) {
+    if (
+      !wantsLuna &&
+      !hasSpecificMediaContext(signal.desiredContexts) &&
+      signal.explicitMediaRequest &&
+      ["selfie", "casual", "cute", "flirty", "home"].includes(asset.category)
+    ) {
       return { topical: 0, score: 1 };
     }
     return { topical: 0, score: 0 };

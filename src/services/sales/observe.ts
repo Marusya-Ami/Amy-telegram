@@ -8,6 +8,12 @@ import { decideSales, commercialReplyContext, type MediaCandidate, type OfferCan
 import { extractSalesSignal } from "@/services/sales/extract";
 import { salesEngineMode } from "@/services/sales/mode";
 import { readSalesSignal, type SalesContext, type SignalReading } from "@/services/sales/signals";
+import {
+  boundMediaContextHistory,
+  MEDIA_CONTEXT_HISTORY_LIMIT,
+  MEDIA_CONTEXT_WINDOW_MS,
+  type MediaContextMessage,
+} from "@/services/media/context";
 import { executeFreeMedia, freeMediaMode, type FreePhotoSend } from "@/services/media/executeFreeMedia";
 import { freeSelectableAssetWhere } from "@/services/media/eligibility";
 import { executePaidOffer, paidOfferMode, type PaidOfferSend } from "@/services/payments/paidOffer";
@@ -32,6 +38,7 @@ type Catalog = {
   mediaDeliveries: { mediaAssetId: string; sentAt: Date }[];
   dynamic: InteractionDynamic;
   dynamicConfidence: number;
+  userTimezone?: string | null;
 };
 
 export async function observeSalesTurn(
@@ -59,6 +66,7 @@ export async function observeSalesTurn(
   try {
     const now = options?.now ?? new Date();
     const history = options?.tipHistory ?? await loadTipHistory(input.conversationId, now, input.userTexts, input.amyTexts);
+    const mediaHistory = await loadMediaContextHistory(input.conversationId, now, input.userTexts, input.amyTexts);
     const linkSentAt = options?.linkSentAt === undefined ? await latestTipLinkAt(input.userId) : options.linkSentAt;
     const contextual = contextualTipReading({
       now,
@@ -67,7 +75,7 @@ export async function observeSalesTurn(
       linkSentAt,
     });
     const catalog = await (options?.loadCatalog ?? loadCatalog)(input.userId);
-    const context = salesTurnContext(catalog, history, now);
+    const context = salesTurnContext(catalog, history, mediaHistory, now);
     const reading = contextual ?? await (options?.extract ?? extractSalesSignal)(input.userTexts, input.amyTexts, context);
     const amyTipOnCooldown = await tipLinkOnCooldown(input.userId, now, "amy_initiated_tip");
     let decision = decideSales({
@@ -201,7 +209,8 @@ export async function replyCommercialHint(input: {
     const now = input.now ?? new Date();
     const catalog = await loadCatalog(input.userId);
     const history = await loadTipHistory(input.conversationId, now, input.userTexts, []);
-    const reading = readSalesSignal(input.userTexts, salesTurnContext(catalog, history, now));
+    const mediaHistory = await loadMediaContextHistory(input.conversationId, now, input.userTexts, []);
+    const reading = readSalesSignal(input.userTexts, salesTurnContext(catalog, history, mediaHistory, now));
     const amyTipCooldown = await tipLinkOnCooldown(input.userId, now, "amy_initiated_tip");
     const decision = decideSales({
       signal: reading,
@@ -237,13 +246,42 @@ export async function replyCommercialHint(input: {
 
 function salesTurnContext(
   catalog: Catalog,
-  history: TipContextMessage[],
+  tipHistory: TipContextMessage[],
+  mediaHistory: MediaContextMessage[],
   now: Date,
 ): SalesContext {
   return {
     recentFreePhoto: catalog.mediaDeliveries.some((item) => now.getTime() - item.sentAt.getTime() < PHOTO_BRIDGE_MS),
-    recentTexts: history.map((item) => item.text?.trim() ?? "").filter(Boolean).slice(-6),
+    recentTexts: tipHistory.map((item) => item.text?.trim() ?? "").filter(Boolean).slice(-6),
+    // Media scene inheritance uses MEDIA_CONTEXT_WINDOW_MS (30m), not the 10m tip window.
+    history: mediaHistory.slice(-MEDIA_CONTEXT_HISTORY_LIMIT),
+    userTimezone: catalog.userTimezone ?? null,
+    now,
   };
+}
+
+async function loadMediaContextHistory(
+  conversationId: string,
+  now: Date,
+  currentUserLines: string[],
+  currentAmyLines: string[],
+): Promise<MediaContextMessage[]> {
+  const rows = await prisma.message.findMany({
+    where: { conversationId, createdAt: { gte: new Date(now.getTime() - MEDIA_CONTEXT_WINDOW_MS) } },
+    orderBy: { createdAt: "asc" },
+    select: { createdAt: true, sender: true, text: true },
+  });
+  const history: TipContextMessage[] = rows
+    .filter((row) => row.sender === "USER" || row.sender === "AMY")
+    .map((row) => ({ createdAt: row.createdAt, sender: row.sender as "USER" | "AMY", text: row.text }));
+  return boundMediaContextHistory(
+    stripCurrentTurn(history, currentUserLines, currentAmyLines).map((item) => ({
+      sender: item.sender,
+      text: item.text ?? "",
+      createdAt: item.createdAt,
+    })),
+    now,
+  );
 }
 
 async function latestTipLinkAt(userId: string): Promise<Date | null> {
@@ -289,7 +327,7 @@ async function loadCatalog(userId: string): Promise<Catalog> {
   const [user, assets, offers, purchases, interactions, deliveries] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
-      select: { interactionDynamic: true, interactionDynamicConfidence: true },
+      select: { interactionDynamic: true, interactionDynamicConfidence: true, timezone: true },
     }),
     prisma.mediaAsset.findMany({
       where: freeSelectableAssetWhere(),
@@ -342,5 +380,6 @@ async function loadCatalog(userId: string): Promise<Catalog> {
     mediaDeliveries: deliveries,
     dynamic: user?.interactionDynamic ?? "UNKNOWN",
     dynamicConfidence: user?.interactionDynamicConfidence ?? 0,
+    userTimezone: user?.timezone ?? null,
   };
 }
