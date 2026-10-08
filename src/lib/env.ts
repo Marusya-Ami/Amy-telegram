@@ -13,6 +13,9 @@ const envSchema = z.object({
   QUIET_HOURS_START: z.string().optional().default("23:00"),
   QUIET_HOURS_END: z.string().optional().default("09:00"),
   DROPP_WEBHOOK_SECRET: z.string().optional().default(""),
+  DROPP_API_KEY: z.string().optional().default(""),
+  DROPP_API_BASE_URL: z.string().optional().default("https://api.external.dropp.fans/v1"),
+  DROPP_CARD_PAYMENT_ENABLED: z.string().optional().default("false"),
 });
 
 export type AppEnv = z.infer<typeof envSchema> & { OPENAI_MODEL: string };
@@ -36,6 +39,9 @@ export function getEnv(): AppEnv {
     QUIET_HOURS_END: process.env.QUIET_HOURS_END,
     // Bracket access stays dynamic so the production build does not bake in an empty secret.
     DROPP_WEBHOOK_SECRET: process.env["DROPP_WEBHOOK_SECRET"],
+    DROPP_API_KEY: process.env["DROPP_API_KEY"],
+    DROPP_API_BASE_URL: process.env["DROPP_API_BASE_URL"],
+    DROPP_CARD_PAYMENT_ENABLED: process.env["DROPP_CARD_PAYMENT_ENABLED"],
   });
 
   if (!parsed.success) {
