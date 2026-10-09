@@ -7,12 +7,19 @@ import { getEnv } from "@/lib/env";
 import { REPLY_LUNA_MODEL } from "@/lib/openaiModels";
 import { logger } from "@/lib/logger";
 import { withRetry } from "@/lib/retry";
-import { asksAboutPhotos, CAPABILITY_RETRY_NOTE, replyBreaksPhotoCapability } from "@/services/amyBrain/capability";
+import {
+  asksAboutPhotos,
+  CAPABILITY_RETRY_NOTE,
+  TEXT_ONLY_RETRY_NOTE,
+  replyBreaksPhotoCapability,
+  replyInventsTextOnlyLimitation,
+} from "@/services/amyBrain/capability";
+import { FILLER_RETRY_NOTE, recentFillerNote, replyRepeatsTerminalFiller } from "@/services/amyBrain/voice";
 import { parseAmyReply } from "@/services/amyBrain/schema";
 import { interactionToneLine } from "@/services/interaction/dynamic";
 
 const HISTORY_LIMIT = 20;
-const FALLBACK_MESSAGES = ["wait i lost that lol", "say it again?"];
+const FALLBACK_MESSAGES = ["wait i lost that", "say it again?"];
 
 let client: OpenAI | null = null;
 
@@ -59,7 +66,7 @@ export async function generateReply(
         return error instanceof ZodError || error instanceof SyntaxError;
       },
     });
-    const checked = await keepCapabilityReply(currentMessages, reply, messages, complete);
+    const checked = await keepNaturalReply(currentMessages, reply, messages, complete, history);
 
     logger.info("openai.request", {
       userId: input.user.id,
@@ -151,7 +158,20 @@ export async function generateProactive(input: {
   followUpContext: string;
 }): Promise<string[]> {
   const messages = buildReplyMessages(input.user, input.history, [], input.memories, input.followUpContext);
-  return requestReply(messages, completeWithModel).catch(() => ["heyy"]);
+  return requestReply(messages, completeWithModel)
+    .then((reply) => keepNaturalReply([], reply, messages, completeWithModel, input.history))
+    .catch(() => ["heyy"]);
+}
+
+async function keepNaturalReply(
+  currentMessages: string[],
+  reply: string[],
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  complete: ReplyCompletion,
+  history: Pick<Message, "direction" | "sender" | "text">[],
+): Promise<string[]> {
+  const afterCapability = await keepCapabilityReply(currentMessages, reply, messages, complete);
+  return keepFillerReply(afterCapability, messages, complete, history);
 }
 
 async function keepCapabilityReply(
@@ -160,18 +180,45 @@ async function keepCapabilityReply(
   messages: OpenAI.Chat.ChatCompletionMessageParam[],
   complete: ReplyCompletion,
 ): Promise<string[]> {
-  if (!asksAboutPhotos(currentMessages) || !replyBreaksPhotoCapability(reply)) return reply;
-  logger.warn("reply.capability_denied", { bubbles: reply.length });
+  const photoAsk = asksAboutPhotos(currentMessages);
+  const textOnly = replyInventsTextOnlyLimitation(reply);
+  const photoBreak = photoAsk && replyBreaksPhotoCapability(reply);
+  if (!textOnly && !photoBreak) return reply;
+  logger.warn("reply.capability_denied", { bubbles: reply.length, textOnly, photoBreak });
+  const note = textOnly ? TEXT_ONLY_RETRY_NOTE : CAPABILITY_RETRY_NOTE;
   try {
-    const retried = await requestReply([...messages, { role: "system", content: CAPABILITY_RETRY_NOTE }], complete);
-    if (!replyBreaksPhotoCapability(retried)) return retried;
+    const retried = await requestReply([...messages, { role: "system", content: note }], complete);
+    if (!replyInventsTextOnlyLimitation(retried) && !(photoAsk && replyBreaksPhotoCapability(retried))) {
+      return retried;
+    }
   } catch (error) {
     logger.warn("reply.capability_retry_failed", {
       name: error instanceof Error ? error.name : "Error",
     });
   }
   logger.warn("reply.capability_denied", { kept: false });
-  return currentMessages.some((text) => /[а-яё]/i.test(text)) ? ["ну есть"] : ["yeah i do"];
+  if (photoAsk) return currentMessages.some((text) => /[а-яё]/i.test(text)) ? ["ну есть"] : ["yeah i do"];
+  return currentMessages.some((text) => /[а-яё]/i.test(text)) ? ["хм"] : ["hmm"];
+}
+
+async function keepFillerReply(
+  reply: string[],
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  complete: ReplyCompletion,
+  history: Pick<Message, "direction" | "sender" | "text">[],
+): Promise<string[]> {
+  if (!replyRepeatsTerminalFiller(reply, history)) return reply;
+  logger.warn("reply.filler_repeated", { bubbles: reply.length });
+  try {
+    const retried = await requestReply([...messages, { role: "system", content: FILLER_RETRY_NOTE }], complete);
+    if (!replyRepeatsTerminalFiller(retried, history)) return retried;
+    return retried;
+  } catch (error) {
+    logger.warn("reply.filler_retry_failed", {
+      name: error instanceof Error ? error.name : "Error",
+    });
+    return reply;
+  }
 }
 
 export function buildReplyMessages(
@@ -209,6 +256,9 @@ export function buildReplyMessages(
     commercialContext,
     "Use emojis sparingly. Check your recent messages and avoid repeating the same emoji or emoji pattern. Many replies should have no emoji. Do not end several messages in a row with an emoji.",
     recentEmojiNote(history),
+    "Do not default to ending messages with lol, haha, or lmao. Use that only when this turn is actually funny. Do not repeat the same closer across recent messages.",
+    recentFillerNote(history),
+    "Never say you can only text or invent a temporary technical reason a photo cannot be sent.",
     "Do not mechanically end replies with questions. Prefer natural variation (reactions, short comments, teases, or statements) without forcing a question.",
     "Never invent or confirm real-world meetings, physical encounters, shared travel, or offline events that did not actually happen. You can remain affectionate, romantic, and playful without treating invented offline history as factual.",
     "Do not promise or claim you will perform unsupported digital or real-world actions (combining/editing photos, posting externally, calling, meeting in person, contacting friends, sending physical items). You can playfully tease, imagine scenarios, or say how something WOULD look or feel hypothetically ('okay wait... us in one frame would actually be ridiculously cute 😭') without promising to execute it, narrating editing tasks, or asserting third-party reactions as facts. Never give robotic AI refusals.",

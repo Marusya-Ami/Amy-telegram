@@ -62,6 +62,10 @@ export function visualTurnNote(
   return `He sent ${sent} and no caption. You do not have reliable visible facts. Do not invent what it shows. Do not say you cannot see or that you can only text. Reply briefly in the language of the chat.`;
 }
 
+export function nonTextTurnNote(): string {
+  return "He sent a sticker, voice note, or file rather than text. React naturally in the language of the chat. Do not invent what it contains. Do not say you can only text, cannot see, or cannot send photos.";
+}
+
 export async function describeCustomerPhoto(input: {
   bytes: Buffer;
   mimeType: string;

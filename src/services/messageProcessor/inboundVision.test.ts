@@ -383,7 +383,7 @@ test("a reply that contains a photo and an album stay one visual turn", async ()
   }
 });
 
-test("a sticker can still use the text-only fallback", async () => {
+test("a sticker still gets a natural reply and never claims text-only", async () => {
   const { interpretUpdate } = await import("../../lib/telegram/parseUpdate");
   const animation = interpretUpdate(businessMedia({
     animation: { thumbnail: { file_id: "gif-still", file_unique_id: "g", width: 10, height: 10 } },
@@ -403,6 +403,8 @@ test("a sticker can still use the text-only fallback", async () => {
   const { prisma } = await import("../../lib/db/prisma");
   const { processImmediateMessage } = await import("./runTurn");
   const user = await seedUser(prisma, "vision-sticker");
+  let generated = 0;
+  let visual: string | null = null;
   try {
     const message = await prisma.message.create({
       data: {
@@ -415,9 +417,17 @@ test("a sticker can still use the text-only fallback", async () => {
         metadata: { kind: "unsupported", processed: false },
       },
     });
-    await processImmediateMessage(user.userId, message.id, deps(async () => ["should not generate"]));
+    await processImmediateMessage(user.userId, message.id, deps(async (input) => {
+      generated += 1;
+      visual = input.visualContext ?? null;
+      return ["cute"];
+    }));
     const outbound = await prisma.message.findFirst({ where: { userId: user.userId, direction: "OUTBOUND" } });
-    assert.equal(outbound?.text, "i can only text right now");
+    assert.equal(generated, 1);
+    assert.match(visual ?? "", /sticker, voice note, or file/);
+    assert.doesNotMatch(visual ?? "", /i can only text/i);
+    assert.equal(outbound?.text, "cute");
+    assert.notEqual(outbound?.text, "i can only text right now");
   } finally {
     await cleanup(prisma, user.userId);
   }

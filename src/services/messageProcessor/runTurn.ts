@@ -5,7 +5,7 @@ import { logger } from "@/lib/logger";
 import { sleep } from "@/lib/retry";
 import { generateReply } from "@/services/amyBrain";
 import { interMessageDelayMs } from "@/services/messageProcessor/burstScheduler";
-import { describeCustomerPhoto, formatCustomerPhotoContext, visualTurnNote } from "@/services/conversation/customerVision";
+import { describeCustomerPhoto, formatCustomerPhotoContext, nonTextTurnNote, visualTurnNote } from "@/services/conversation/customerVision";
 import { turnEpoch, waitForHumanReply } from "@/services/messageProcessor/humanDelay";
 import { downloadTelegramFile } from "@/services/media/telegramFile";
 import { telegramBotTransport } from "@/services/transport/telegramBotTransport";
@@ -19,8 +19,7 @@ import { confirmDelete, disableProactive, enableProactive, requestDelete, wipeUs
 
 const MAX_DELIVERY_ATTEMPTS = 3;
 
-const UNSUPPORTED_REPLY = "i can only text right now";
-const RATE_LIMIT_REPLY = "slow down a sec lol";
+const RATE_LIMIT_REPLY = "slow down a sec";
 const AI_DISABLED_REPLY = "i can't answer right now";
 
 export type TurnDeps = {
@@ -344,13 +343,13 @@ async function composeTexts(userId: string, group: Message[], deps: TurnDeps): P
   });
   if (kind === "start") return [startReply(user.firstName)];
   if (!user.aiEnabled) return [AI_DISABLED_REPLY];
-  if ((!hasVisual && kind !== "text") || (currentMessages.length === 0 && !hasVisual)) return [UNSUPPORTED_REPLY];
   if (await isRateLimited(userId)) {
     logger.warn("telegram.rate_limited", { userId });
     return [RATE_LIMIT_REPLY];
   }
 
-  const spoken = currentMessages.length > 0 ? currentMessages : ["(sent a photo)"];
+  const spoken =
+    currentMessages.length > 0 ? currentMessages : hasVisual ? ["(sent a photo)"] : ["(sent a sticker or file)"];
   let memories: Awaited<ReturnType<typeof selectRelevantMemories>> = [];
   try {
     memories = await selectRelevantMemories(userId, spoken);
@@ -370,7 +369,7 @@ async function composeTexts(userId: string, group: Message[], deps: TurnDeps): P
     select: { direction: true, sender: true, text: true },
   });
 
-  const visualContext = hasVisual ? await photoContext(group, deps) : null;
+  const visualContext = hasVisual ? await photoContext(group, deps) : kind !== "text" ? nonTextTurnNote() : null;
   let commercialContext: string | null = null;
   try {
     commercialContext = await replyCommercialHint({
